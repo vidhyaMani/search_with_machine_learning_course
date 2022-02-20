@@ -1,6 +1,8 @@
 #
 # The main search hooks for the Search Flask application.
 #
+import json
+
 from flask import (
     Blueprint, redirect, render_template, request, url_for
 )
@@ -21,6 +23,7 @@ def process_filters(filters_input):
     applied_filters = ""
     for filter in filters_input:
         type = request.args.get(filter + ".type")
+        key = request.args.get(filter + ".key")
         display_name = request.args.get(filter + ".displayName", filter)
         #
         # We need to capture and return what filters are already applied so they can be automatically added to any existing links we display in aggregations.jinja2
@@ -28,10 +31,35 @@ def process_filters(filters_input):
                                                                                  display_name)
         #TODO: IMPLEMENT AND SET filters, display_filters and applied_filters.
         # filters get used in create_query below.  display_filters gets used by display_filters.jinja2 and applied_filters gets used by aggregations.jinja2 (and any other links that would execute a search.)
-        if type == "range":
-            pass
+        if type == "range":            
+            fromFilter = request.args.get(filter + ".from")
+            toFilter = request.args.get(filter + ".to")
+            rangeFilter = {
+                "range": {
+
+                }
+            }
+            rangeFilter["range"][filter] = {
+
+                        "from": fromFilter,
+                        "to": toFilter
+
+            }
+            filters.append(rangeFilter)
+            display_filters.append("{} ({} - {})".format(display_name, fromFilter, toFilter))
+            applied_filters += "&{}.from={}".format(filter, fromFilter)
+            applied_filters += "&{}.to={}".format(filter, toFilter)
         elif type == "terms":
             pass #TODO: IMPLEMENT
+            filterValue = request.args.get(filter + ".key")
+            termsFilter = {
+                "terms": {
+
+                }
+            }
+            termsFilter["terms"][filter + ".keyword"] = [filterValue]
+            filters.append(termsFilter)
+            display_filters.append("{}: {}".format(display_name, filterValue))
     print("Filters: {}".format(filters))
 
     return filters, display_filters, applied_filters
@@ -74,8 +102,10 @@ def query():
         query_obj = create_query("*", [], sort, sortDir)
 
     print("query obj: {}".format(query_obj))
-    response = None   # TODO: Replace me with an appropriate call to OpenSearch
-    # Postprocess results here if you so desire
+    response = opensearch.search(
+        body = query_obj,
+        index = "bbuy_products"
+    ) 
 
     #print(response)
     if error is None:
@@ -87,14 +117,116 @@ def query():
 
 
 def create_query(user_query, filters, sort="_score", sortDir="desc"):
+    
     print("Query: {} Filters: {} Sort: {}".format(user_query, filters, sort))
-    query_obj = {
-        'size': 10,
-        "query": {
-            "match_all": {} # Replace me with a query that both searches and filters
+    aggs = {
+        "regularPrice": {
+            "range": {
+                "field": "regularPrice",
+                    "ranges": [
+                    { "key": "$", "from": 0.0, "to": 10.0 },
+                    { "key": "$$", "from": 10.0, "to": 20.0 },
+                    { "key": "$$$", "from": 30.0, "to": 1000.0 }
+                ]
+            }
         },
-        "aggs": {
-            #TODO: FILL ME IN
+        "missing_image": {
+            "missing": { "field": "image.keyword" }        
+        },
+        "department": {
+            "terms" : {
+                "field": "department.keyword",
+                "order": { 
+                    "_count": "desc" 
+                }
+            }
         }
     }
+
+    if user_query == "*":
+        query_obj = {
+            'size': 10,
+            "query": {
+                "bool": {
+                    "must": {
+                        "match_all": {}
+                    }
+                }
+            }
+        }
+        query_obj['query']["bool"]["filter"] = filters
+    else:
+        query_obj = {
+            "size": 10,
+            "query": {
+                "function_score": {
+                    "query": {
+                        "bool": {
+                            "filter": [],
+                            "must": {
+                                "multi_match": {
+                                    "fields": [
+                                        "name^100",
+                                        "shortDescription^50",
+                                        "longDescription^10",
+                                        "department"
+                                    ],
+                                    "query": user_query
+                                }
+                            },
+                            "should": {
+                                "match_phrase": {
+                                    "name": {
+                                        "query":  user_query,
+                                        "analyzer": "english",
+                                        "boost": 200,                                        
+                                        "slop": 1                                    
+                                    }                                    
+                                }
+                            }
+                        }
+                    },
+                    "boost_mode": "multiply",
+                    "score_mode": "avg",
+                    "functions": [
+                    {
+                        "field_value_factor": {
+                            "field": "salesRankLongTerm",
+                            "modifier": "reciprocal",
+                            "missing": 1000000000
+                        }
+                    },
+                    {
+                        "field_value_factor": {
+                            "field": "salesRankMediumTerm",
+                            "modifier": "reciprocal",
+                            "missing": 1000000000
+                        }
+                    },
+                    {
+                        "field_value_factor": {
+                            "field": "salesRankShortTerm",
+                            "modifier": "reciprocal",
+                            "missing": 1000000000
+                        }
+                    }
+
+                    ]
+                }
+
+            }
+
+        }
+
+        query_obj['query']["function_score"]['query']["bool"]["filter"] = filters
+
+    query_obj['aggs'] = aggs
+    sortBy = {}    
+    sortBy[sort] = sortDir
+
+    query_obj["sort"] = [sortBy]
+
+   
+    
+
     return query_obj
