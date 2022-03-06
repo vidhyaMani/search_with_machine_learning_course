@@ -2,7 +2,11 @@ import os
 import xml.etree.ElementTree as ET
 import argparse
 from pathlib import Path
-
+import nltk
+from nltk.stem.snowball import SnowballStemmer
+from collections import Counter
+import string
+import re
 
 directory = r'/workspace/datasets/product_data/products/'
 parser = argparse.ArgumentParser(description='Process some integers.')
@@ -25,10 +29,35 @@ if args.input:
 
 sample_rate = args.sample_rate
 
-def transform_training_data(name):
-    # IMPLEMENT
-    return name.replace('\n', ' ')
+stemmer = SnowballStemmer('english')
 
+def transform_training_data(product_name
+    , lowercase=True
+    , stemming=False
+    , remove_punct=True
+    , remove_newline=True
+    , remove_tabs=True
+    , remove_tm=True):
+
+    if lowercase == True:
+        product_name = product_name.lower()
+
+    if stemming == True:
+        product_name = stemmer.stem(product_name)
+
+    if remove_punct == True:
+        product_name = product_name.translate(str.maketrans("", "", string.punctuation))
+
+    if remove_newline == True:
+        product_name = product_name.replace("\n"," ")
+
+    if remove_tabs == True:
+        product_name = product_name.replace("\t"," ")
+
+    if remove_tm == True:
+        product_name = product_name.replace("™","").replace("®","")
+
+    return product_name
 # Directory for product data
 
 print("Writing results to %s" % output_file)
